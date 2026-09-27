@@ -1,4 +1,4 @@
-// Cloudflare Pages Serverless Proxy for GeminiFlex with Tavily AI Real-time Web Search
+// Cloudflare Pages Serverless Proxy for GeminiFlex with Advanced Tavily Search
 
 async function fetchTavilySearch(query, tavilyApiKey) {
   try {
@@ -8,16 +8,20 @@ async function fetchTavilySearch(query, tavilyApiKey) {
       body: JSON.stringify({
         api_key: tavilyApiKey,
         query: query,
-        max_results: 3,
-        search_depth: "basic",
+        search_depth: "advanced",
+        include_answer: true,
+        max_results: 4,
       }),
     });
 
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const data = await resp.json();
-    return data.results || [];
+    return {
+      answer: data.answer || "",
+      results: data.results || [],
+    };
   } catch (e) {
-    return [];
+    return null;
   }
 }
 
@@ -40,7 +44,7 @@ export async function onRequest(context) {
     return new Response(
       JSON.stringify({
         status: "online",
-        service: "GeminiFlex Cloudflare Pages (Tavily Search-Enabled)",
+        service: "GeminiFlex Cloudflare Pages (Advanced Search-Enabled)",
         default_model: "gemini-3.5-flash-lite",
         stats: {
           daily_limit: 500,
@@ -52,7 +56,7 @@ export async function onRequest(context) {
     );
   }
 
-  // پردازش هوشمند پیام با سرچ زنده Tavily
+  // پردازش هوشمند پیام با سرچ زنده پیشرفته
   if (url.pathname === "/generate" && request.method === "POST") {
     try {
       const body = await request.json();
@@ -93,25 +97,23 @@ export async function onRequest(context) {
         );
       }
 
-      // دستورالعمل سیستمی پایه
-      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI assistant built by Google.";
+      // دستورالعمل سیستمی
+      let systemPromptText = "You are Gemini, an intelligent, precise, and state-of-the-art AI built by Google.";
 
-      // کلیدواژه‌های جستجوی زنده در وب
-      const searchKeywords = [
-        "بازی", "فوتبال", "مسابقه", "نتیجه", "نتایج", "امشب", "امروز", "الان", "ساعت", "تاریخ",
-        "اخبار", "جدید", "قیمت", "هوا", "چند", "کی", "سرچ", "بیتکوین", "طلا", "دلار", "ارز",
-        "schedule", "score", "match", "result", "today", "tonight", "news", "price", "btc"
-      ];
-
-      const needsSearch = prompt.length > 2 && (searchKeywords.some(kw => prompt.toLowerCase().includes(kw)) || prompt.includes("؟") || prompt.includes("?"));
-
-      if (needsSearch && tavilyApiKey) {
-        const searchResults = await fetchTavilySearch(prompt, tavilyApiKey);
-        if (searchResults.length > 0) {
-          const formattedResults = searchResults
-            .map((r, idx) => `[منبع ${idx + 1}: ${r.title}]\n${r.content}`)
-            .join("\n\n");
-          systemPromptText += `\n\n[نتایج زنده جستجوی اینترنت برای این سوال]:\n${formattedResults}\n\nپاسخ کاربر را بر اساس نتایج زنده و به‌روز بالا، به صورت دقیق و به زبان فارسی ارائه کن.`;
+      // جستجوی وب برای تمام سوالات اطلاعاتی، قیمت‌ها، وقایع زنده و اخبار
+      if (prompt.length > 2 && tavilyApiKey) {
+        const searchData = await fetchTavilySearch(prompt, tavilyApiKey);
+        if (searchData && (searchData.answer || searchData.results.length > 0)) {
+          let searchContext = "";
+          if (searchData.answer) {
+            searchContext += `[خلاصه موثق و قطعی موتور جستجو]:\n${searchData.answer}\n\n`;
+          }
+          if (searchData.results.length > 0) {
+            searchContext += `[جزئیات منابع زنده وب]:\n` + searchData.results
+              .map((r, idx) => `(منبع ${idx + 1}: ${r.title})\n${r.content}`)
+              .join("\n\n");
+          }
+          systemPromptText += `\n\n[اطلاعات زنده و اینترنتی موثق برای این سوال]:\n${searchContext}\n\nنکته مهم: برای پاسخ به سوال کاربر حتماً و موکداً از اطلاعات زنده بالا استفاده کن. اگر قیمت لحظه‌ای، تاریخ، ساعت یا نتیجه بازی خواسته شده، دقیقاً همان عدد و داده‌های جدید و قطعی استخراج‌شده بالا را ملاک قرار بده و به کاربر اعلام کن.`;
         }
       }
 
@@ -124,7 +126,7 @@ export async function onRequest(context) {
           parts: [{ text: systemPromptText }],
         },
         generationConfig: {
-          temperature: body.temperature ?? 0.4,
+          temperature: body.temperature ?? 0.3,
           maxOutputTokens: body.maxOutputTokens ?? 2048,
         },
       };
