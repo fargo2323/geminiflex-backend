@@ -197,7 +197,7 @@ export async function onRequest(context) {
       }
 
       // دستورالعمل سیستمی برای هوش مصنوعی
-      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI built by Google. You have full memory of this ongoing conversation thread. Always stay consistent with previous conversation turns and user topics.";
+      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI built by Google. You have full memory of this ongoing conversation thread. Always stay consistent with previous conversation turns and user topics.\n\n[CRITICAL - NATIVE CHART ENGINE]: Your client application interface has a built-in Native Interactive Animated Chart Engine. NEVER say 'I cannot draw charts' or 'من به عنوان هوش مصنوعی متنی امکان ترسیم مستقیم نمودار ندارم'! Whenever the user asks for a chart, graph, price trend, technical levels, comparison, or asks 'can you draw/plot a chart?', you MUST ALWAYS include a ```chart code block in JSON format alongside your explanation so the app UI renders it immediately as an interactive visual chart:\n```chart\n{\"type\":\"line\",\"title\":\"روند قیمت\",\"data\":[{\"label\":\"نقطه ۱\",\"value\":80000},{\"label\":\"نقطه ۲\",\"value\":85000}]}\n```\n(Supported types: 'line' for trends/prices, 'bar' for categories, 'pie' for shares).";
 
       // ارزیابی هوشمند نیاز به جستجوی وب
       const searchDecision = evaluateWebSearch(prompt, conversationTurns);
@@ -214,78 +214,4 @@ export async function onRequest(context) {
               .map((r, idx) => `(منبع ${idx + 1}: ${r.title})\n${r.content}`)
               .join("\n\n");
           }
-          systemPromptText += `\n\n[اطلاعات زنده وب استخراج‌شده برای موضوع کاربر]:\n${searchContext}\n\nنکته مهم: از اطلاعات زنده بالا استفاده کن مشروط بر اینکه مستقیماً با موضوع اصلی مکالمه (مثلاً بیت‌کوین) مرتبط باشد. اگر اطلاعات مربوط به دارایی یا موضوع دیگری است، به کانتکست و تاریخچه مکالمه وفادار بمان.`;
-        }
-      }
-
-      const startTime = Date.now();
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-      const requestPayload = {
-        contents: conversationTurns,
-        systemInstruction: {
-          parts: [{ text: systemPromptText }],
-        },
-        generationConfig: {
-          temperature: body.temperature ?? 0.3,
-          maxOutputTokens: body.maxOutputTokens ?? 2048,
-        },
-      };
-
-      const geminiResponse = await fetch(geminiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestPayload),
-      });
-
-      const geminiData = await geminiResponse.json();
-      const latencyMs = Date.now() - startTime;
-
-      if (!geminiResponse.ok) {
-        return new Response(
-          JSON.stringify({ success: false, status_code: geminiResponse.status, error: geminiData }),
-          { status: geminiResponse.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const candidate = geminiData.candidates?.[0];
-      let replyText = "";
-      if (candidate?.content?.parts) {
-        replyText = candidate.content.parts.map((p) => p.text || "").join("");
-      }
-
-      const usage = geminiData.usageMetadata || {};
-      const promptTokens = usage.promptTokenCount || 0;
-      const candidatesTokens = usage.candidatesTokenCount || 0;
-      const totalTokens = usage.totalTokenCount || promptTokens + candidatesTokens;
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          model_used: model,
-          reply: replyText,
-          latency_ms: latencyMs,
-          stats: {
-            daily_limit: 500,
-            rpm_limit: 15,
-            tpm_limit: 250000,
-            last_tokens_used: totalTokens,
-            prompt_tokens: promptTokens,
-            reply_tokens: candidatesTokens,
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    } catch (err) {
-      return new Response(
-        JSON.stringify({ error: "Server Error", message: err.message }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-  }
-
-  return new Response(JSON.stringify({ error: "Not found" }), {
-    status: 404,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
-  });
-}
+          systemPromptText += `\n\n[اطلاعات زنده وب استخراج‌شده برای موضوع کاربر]:\n${searchContext}\n\nنکته مهم: از اطلاعات زنده بالا استفاده کن مشروط بر اینکه مستقیماً با موضوع اصلی مکالمه (مثلاً بیت‌کوین) مرتبط باشد. اگر اطلاعات مربوط
