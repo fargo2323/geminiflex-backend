@@ -1,28 +1,21 @@
-// Cloudflare Pages Serverless Proxy for GeminiFlex with Built-in Live Web Search
+// Cloudflare Pages Serverless Proxy for GeminiFlex with Tavily AI Real-time Web Search
 
-async function fetchWebSearch(query) {
+async function fetchTavilySearch(query, tavilyApiKey) {
   try {
-    const resp = await fetch("https://html.duckduckgo.com/html/", {
+    const resp = await fetch("https://api.tavily.com/search", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      body: new URLSearchParams({ q: query }).toString(),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: tavilyApiKey,
+        query: query,
+        max_results: 3,
+        search_depth: "basic",
+      }),
     });
 
     if (!resp.ok) return [];
-    const html = await resp.text();
-
-    const snippets = [];
-    const regex = /<a[^>]*class=["']result__snippet["'][^>]*>([\s\S]*?)<\/a>/gi;
-    let match;
-    while ((match = regex.exec(html)) !== null && snippets.length < 5) {
-      const clean = match[1].replace(/<[^>]+>/g, "").trim();
-      if (clean.length > 10) snippets.push(clean);
-    }
-    return snippets;
+    const data = await resp.json();
+    return data.results || [];
   } catch (e) {
     return [];
   }
@@ -47,7 +40,7 @@ export async function onRequest(context) {
     return new Response(
       JSON.stringify({
         status: "online",
-        service: "GeminiFlex Cloudflare Pages (Search-Enabled)",
+        service: "GeminiFlex Cloudflare Pages (Tavily Search-Enabled)",
         default_model: "gemini-3.5-flash-lite",
         stats: {
           daily_limit: 500,
@@ -59,11 +52,12 @@ export async function onRequest(context) {
     );
   }
 
-  // پردازش هوشمند پیام با سرچ زنده وب
+  // پردازش هوشمند پیام با سرچ زنده Tavily
   if (url.pathname === "/generate" && request.method === "POST") {
     try {
       const body = await request.json();
       const apiKey = body.apiKey && body.apiKey.trim() ? body.apiKey.trim() : env.GEMINI_API_KEY;
+      const tavilyApiKey = env.TAVILY_API_KEY || "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";
 
       if (!apiKey) {
         return new Response(
@@ -99,16 +93,25 @@ export async function onRequest(context) {
         );
       }
 
-      // بررسی هوشمند نیاز به جستجوی وب برای نتایج زنده، مسابقات، اخبار و رویدادها
-      let systemPromptText = "You are Gemini, a helpful, precise, and state-of-the-art AI built by Google.";
-      
-      const searchKeywords = ["بازی", "فوتبال", "مسابقه", "نتیجه", "نتایج", "امشب", "امروز", "الان", "ساعت", "تاریخ", "اخبار", "جدید", "قیمت", "هوا", "schedule", "score", "match", "result", "today", "tonight", "news"];
-      const needsSearch = prompt.length > 2 && searchKeywords.some(kw => prompt.toLowerCase().includes(kw));
+      // دستورالعمل سیستمی پایه
+      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI assistant built by Google.";
 
-      if (needsSearch) {
-        const searchResults = await fetchWebSearch(prompt);
+      // کلیدواژه‌های جستجوی زنده در وب
+      const searchKeywords = [
+        "بازی", "فوتبال", "مسابقه", "نتیجه", "نتایج", "امشب", "امروز", "الان", "ساعت", "تاریخ",
+        "اخبار", "جدید", "قیمت", "هوا", "چند", "کی", "سرچ", "بیتکوین", "طلا", "دلار", "ارز",
+        "schedule", "score", "match", "result", "today", "tonight", "news", "price", "btc"
+      ];
+
+      const needsSearch = prompt.length > 2 && (searchKeywords.some(kw => prompt.toLowerCase().includes(kw)) || prompt.includes("؟") || prompt.includes("?"));
+
+      if (needsSearch && tavilyApiKey) {
+        const searchResults = await fetchTavilySearch(prompt, tavilyApiKey);
         if (searchResults.length > 0) {
-          systemPromptText += `\n[Live Web Search Results from the Internet]:\n${searchResults.map((s, idx) => `(${idx + 1}) ${s}`).join("\n")}\nUse these live web search results to provide accurate, real-time facts, match scores, and current event details to the user.`;
+          const formattedResults = searchResults
+            .map((r, idx) => `[منبع ${idx + 1}: ${r.title}]\n${r.content}`)
+            .join("\n\n");
+          systemPromptText += `\n\n[نتایج زنده جستجوی اینترنت برای این سوال]:\n${formattedResults}\n\nپاسخ کاربر را بر اساس نتایج زنده و به‌روز بالا، به صورت دقیق و به زبان فارسی ارائه کن.`;
         }
       }
 
