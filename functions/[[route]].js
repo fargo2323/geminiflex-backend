@@ -1,4 +1,4 @@
-// Cloudflare Pages Serverless Proxy for GeminiFlex
+// Cloudflare Pages Serverless Proxy for GeminiFlex with Live Google Search & Real-time Clock
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -14,13 +14,12 @@ export async function onRequest(context) {
     return new Response(null, { headers: corsHeaders });
   }
 
-  // وضعیت و لیمیت‌ها
+  // وضعیت و آمار سهمیه
   if (url.pathname === "/stats" || (url.pathname === "/" && request.method === "GET")) {
-    const todayStr = new Date().toISOString().split("T")[0];
     return new Response(
       JSON.stringify({
         status: "online",
-        service: "GeminiFlex Cloudflare Pages",
+        service: "GeminiFlex Cloudflare Pages (Search-Enabled)",
         default_model: "gemini-3.5-flash-lite",
         stats: {
           daily_limit: 500,
@@ -32,7 +31,7 @@ export async function onRequest(context) {
     );
   }
 
-  // ارسال پرامپت و تصویر به گوگل جمنای
+  // پردازش هوشمند پیام با سرچ زنده گوگل و ساعت گوشی
   if (url.pathname === "/generate" && request.method === "POST") {
     try {
       const body = await request.json();
@@ -48,6 +47,7 @@ export async function onRequest(context) {
       const prompt = body.prompt || "";
       const images = body.images || [];
       const model = body.model || "gemini-3.5-flash-lite";
+      const deviceDateTime = body.deviceDateTime || "";
 
       const parts = [];
       for (const img of images) {
@@ -72,22 +72,49 @@ export async function onRequest(context) {
         );
       }
 
+      // دستورالعمل سیستمی: تنظیم هویت جمنای + تزریق ساعت و تقویم گوشی کاربر
+      let systemPromptText = "You are Gemini, a helpful, precise, and state-of-the-art AI built by Google.";
+      if (deviceDateTime.trim().length > 0) {
+        systemPromptText += `\n[Device Live Context]: ${deviceDateTime}\nAlways answer questions about 'tonight', 'today', 'now', match fixtures, or live events using this exact real-world calendar context.`;
+      }
+
       const startTime = Date.now();
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-      const geminiResponse = await fetch(geminiUrl, {
+      // ساخت بدنه با فعال‌سازی Google Search Grounding
+      const requestPayload = {
+        contents: [{ role: "user", parts: parts }],
+        systemInstruction: {
+          parts: [{ text: systemPromptText }]
+        },
+        tools: [
+          { google_search: {} }
+        ],
+        generationConfig: {
+          temperature: body.temperature ?? 0.4,
+          maxOutputTokens: body.maxOutputTokens ?? 2048,
+        },
+      };
+
+      let geminiResponse = await fetch(geminiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: parts }],
-          generationConfig: {
-            temperature: body.temperature ?? 0.4,
-            maxOutputTokens: body.maxOutputTokens ?? 2048,
-          },
-        }),
+        body: JSON.stringify(requestPayload),
       });
 
-      const geminiData = await geminiResponse.json();
+      let geminiData = await geminiResponse.json();
+
+      // مکانیزم ایمنی: اگر مدلی از tools پشتیبانی نکرد، بدون ابزار بازپخش شود
+      if (!geminiResponse.ok && geminiData.error?.message?.includes("tool")) {
+        delete requestPayload.tools;
+        geminiResponse = await fetch(geminiUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestPayload),
+        });
+        geminiData = await geminiResponse.json();
+      }
+
       const latencyMs = Date.now() - startTime;
 
       if (!geminiResponse.ok) {
@@ -97,8 +124,12 @@ export async function onRequest(context) {
         );
       }
 
-      const replyText =
-        geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      // تجمیع بخش‌های متنی پاسخ
+      const candidate = geminiData.candidates?.[0];
+      let replyText = "";
+      if (candidate?.content?.parts) {
+        replyText = candidate.content.parts.map((p) => p.text || "").join("");
+      }
 
       const usage = geminiData.usageMetadata || {};
       const promptTokens = usage.promptTokenCount || 0;
