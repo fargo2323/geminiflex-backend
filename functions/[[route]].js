@@ -1,4 +1,32 @@
-// Cloudflare Pages Serverless Proxy for GeminiFlex with Live Google Search & Real-time Clock
+// Cloudflare Pages Serverless Proxy for GeminiFlex with Built-in Live Web Search
+
+async function fetchWebSearch(query) {
+  try {
+    const resp = await fetch("https://html.duckduckgo.com/html/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      body: new URLSearchParams({ q: query }).toString(),
+    });
+
+    if (!resp.ok) return [];
+    const html = await resp.text();
+
+    const snippets = [];
+    const regex = /<a[^>]*class=["']result__snippet["'][^>]*>([\s\S]*?)<\/a>/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null && snippets.length < 5) {
+      const clean = match[1].replace(/<[^>]+>/g, "").trim();
+      if (clean.length > 10) snippets.push(clean);
+    }
+    return snippets;
+  } catch (e) {
+    return [];
+  }
+}
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -31,7 +59,7 @@ export async function onRequest(context) {
     );
   }
 
-  // پردازش هوشمند پیام با سرچ زنده گوگل و ساعت گوشی
+  // پردازش هوشمند پیام با سرچ زنده وب
   if (url.pathname === "/generate" && request.method === "POST") {
     try {
       const body = await request.json();
@@ -47,7 +75,6 @@ export async function onRequest(context) {
       const prompt = body.prompt || "";
       const images = body.images || [];
       const model = body.model || "gemini-3.5-flash-lite";
-      const deviceDateTime = body.deviceDateTime || "";
 
       const parts = [];
       for (const img of images) {
@@ -72,49 +99,40 @@ export async function onRequest(context) {
         );
       }
 
-      // دستورالعمل سیستمی: تنظیم هویت جمنای + تزریق ساعت و تقویم گوشی کاربر
+      // بررسی هوشمند نیاز به جستجوی وب برای نتایج زنده، مسابقات، اخبار و رویدادها
       let systemPromptText = "You are Gemini, a helpful, precise, and state-of-the-art AI built by Google.";
-      if (deviceDateTime.trim().length > 0) {
-        systemPromptText += `\n[Device Live Context]: ${deviceDateTime}\nAlways answer questions about 'tonight', 'today', 'now', match fixtures, or live events using this exact real-world calendar context.`;
+      
+      const searchKeywords = ["بازی", "فوتبال", "مسابقه", "نتیجه", "نتایج", "امشب", "امروز", "الان", "ساعت", "تاریخ", "اخبار", "جدید", "قیمت", "هوا", "schedule", "score", "match", "result", "today", "tonight", "news"];
+      const needsSearch = prompt.length > 2 && searchKeywords.some(kw => prompt.toLowerCase().includes(kw));
+
+      if (needsSearch) {
+        const searchResults = await fetchWebSearch(prompt);
+        if (searchResults.length > 0) {
+          systemPromptText += `\n[Live Web Search Results from the Internet]:\n${searchResults.map((s, idx) => `(${idx + 1}) ${s}`).join("\n")}\nUse these live web search results to provide accurate, real-time facts, match scores, and current event details to the user.`;
+        }
       }
 
       const startTime = Date.now();
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-      // ساخت بدنه با فعال‌سازی Google Search Grounding
       const requestPayload = {
         contents: [{ role: "user", parts: parts }],
         systemInstruction: {
-          parts: [{ text: systemPromptText }]
+          parts: [{ text: systemPromptText }],
         },
-        tools: [
-          { google_search: {} }
-        ],
         generationConfig: {
           temperature: body.temperature ?? 0.4,
           maxOutputTokens: body.maxOutputTokens ?? 2048,
         },
       };
 
-      let geminiResponse = await fetch(geminiUrl, {
+      const geminiResponse = await fetch(geminiUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestPayload),
       });
 
-      let geminiData = await geminiResponse.json();
-
-      // مکانیزم ایمنی: اگر مدلی از tools پشتیبانی نکرد، بدون ابزار بازپخش شود
-      if (!geminiResponse.ok && requestPayload.tools) {
-        delete requestPayload.tools;
-        geminiResponse = await fetch(geminiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestPayload),
-        });
-        geminiData = await geminiResponse.json();
-      }
-
+      const geminiData = await geminiResponse.json();
       const latencyMs = Date.now() - startTime;
 
       if (!geminiResponse.ok) {
@@ -124,7 +142,6 @@ export async function onRequest(context) {
         );
       }
 
-      // تجمیع بخش‌های متنی پاسخ
       const candidate = geminiData.candidates?.[0];
       let replyText = "";
       if (candidate?.content?.parts) {
