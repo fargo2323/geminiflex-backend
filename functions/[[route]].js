@@ -105,7 +105,7 @@ export async function onRequest(context) {
       let geminiData = await geminiResponse.json();
 
       // مکانیزم ایمنی: اگر مدلی از tools پشتیبانی نکرد، بدون ابزار بازپخش شود
-      if (!geminiResponse.ok && geminiData.error?.message?.includes("tool")) {
+      if (!geminiResponse.ok && requestPayload.tools) {
         delete requestPayload.tools;
         geminiResponse = await fetch(geminiUrl, {
           method: "POST",
