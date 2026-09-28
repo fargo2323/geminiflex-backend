@@ -26,32 +26,37 @@ async function fetchTavilySearch(query, tavilyApiKey, depth = "advanced") {
   }
 }
 
-async function fetchLangSearch(query, langSearchApiKey) {
+async function fetchExaSearch(query, exaApiKey) {
   try {
-    const resp = await fetch("https://api.langsearch.com/v1/web-search", {
+    const resp = await fetch("https://api.exa.ai/search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${langSearchApiKey}`,
+        "x-api-key": exaApiKey,
         "User-Agent": "GeminiFlex/2.0",
       },
       body: JSON.stringify({
         query: query,
-        count: 4,
+        type: "auto",
+        numResults: 4,
+        contents: {
+          text: { maxCharacters: 800 },
+        },
       }),
     });
 
     if (!resp.ok) return null;
-    const json = await resp.json();
-    const items = json?.data?.webPages?.value || [];
-    if (items.length === 0) return null;
+    const data = await resp.json();
+    const results = data.results || [];
+    if (results.length === 0) return null;
 
     return {
-      source: "LangSearch (Free)",
+      source: "Exa AI",
       answer: "",
-      results: items.map((item) => ({
-        title: item.name || "",
-        content: item.snippet || item.summary || "",
+      results: results.map((r) => ({
+        title: r.title || "",
+        content: r.text || "",
+        url: r.url || "",
       })),
     };
   } catch (e) {
@@ -242,8 +247,8 @@ export async function onRequest(context) {
       // دستورالعمل سیستمی برای هوش مصنوعی
       let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI built by Google. You have full memory of this ongoing conversation thread. Always stay consistent with previous conversation turns and user topics.\n\n[CRITICAL - NATIVE CHART ENGINE]: Your client application interface has a built-in Native Interactive Animated Chart Engine. NEVER say 'I cannot draw charts' or 'من به عنوان هوش مصنوعی متنی امکان ترسیم مستقیم نمودار ندارم'! Whenever the user asks for a chart, graph, price trend, technical levels, comparison, or asks 'can you draw/plot a chart?', you MUST ALWAYS include a ```chart code block in JSON format alongside your explanation so the app UI renders it immediately as an interactive visual chart:\n```chart\n{\"type\":\"line\",\"title\":\"روند قیمت\",\"data\":[{\"label\":\"نقطه ۱\",\"value\":80000},{\"label\":\"نقطه ۲\",\"value\":85000}]}\n```\n(Supported types: 'line' for trends/prices, 'bar' for categories, 'pie' for shares)." + dateContext;
 
-      const searchProvider = body.searchProvider || "tavily_advanced";
-      const langSearchApiKey = env.LANGSEARCH_API_KEY || "sk-33e03c1b15624e888983cf65a5dab446";
+      const searchProvider = body.searchProvider || "auto";
+      const exaApiKey = env.EXA_API_KEY || "6fc6128a-af54-421c-911f-3ff2c69d9855";
 
       // ارزیابی هوشمند نیاز به جستجوی وب
       const searchDecision = evaluateWebSearch(prompt, conversationTurns);
@@ -251,22 +256,31 @@ export async function onRequest(context) {
 
       if (searchDecision.shouldSearch) {
         let searchData = null;
-        if (searchProvider === "tavily_basic") {
-          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "basic");
-          if (!searchData && langSearchApiKey) {
-            searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
+
+        if (searchProvider === "exa") {
+          // ۱. انتخاب صریح Exa AI (با فال‌بک در صورت تمام شدن سهمیه به Tavily)
+          if (exaApiKey) {
+            searchData = await fetchExaSearch(searchDecision.query, exaApiKey);
           }
-        } else if (searchProvider === "langsearch") {
-          searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
-          // اگر لانگ‌سرچ خالی برگرداند (در وب فارسی صفر است)، اتوماتیک فال‌بک به تاویلی پیشرفته
           if ((!searchData || searchData.results.length === 0) && tavilyApiKey) {
             searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "advanced");
           }
+        } else if (searchProvider === "tavily" || searchProvider === "tavily_advanced" || searchProvider === "tavily_basic") {
+          // ۲. انتخاب صریح Tavily (با فال‌بک در صورت تمام شدن سهمیه به Exa)
+          const depth = searchProvider === "tavily_basic" ? "basic" : "advanced";
+          if (tavilyApiKey) {
+            searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, depth);
+          }
+          if ((!searchData || searchData.results.length === 0) && exaApiKey) {
+            searchData = await fetchExaSearch(searchDecision.query, exaApiKey);
+          }
         } else {
-          // پیش‌فرض: Tavily Advanced (دقیق‌ترین و عمیق‌ترین جستجو)
-          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "advanced");
-          if (!searchData && langSearchApiKey) {
-            searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
+          // ۳. حالت پیش‌فرض و ترکیب هوشمند (auto): اولویت با Exa AI، در صورت خطا یا اتمام سهمیه فال‌بک به Tavily Advanced
+          if (exaApiKey) {
+            searchData = await fetchExaSearch(searchDecision.query, exaApiKey);
+          }
+          if ((!searchData || searchData.results.length === 0) && tavilyApiKey) {
+            searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "advanced");
           }
         }
 
