@@ -1,6 +1,6 @@
 // Cloudflare Pages Serverless Proxy for GeminiFlex with Context-Aware Multi-Turn History & Smart Web Search
 
-async function fetchTavilySearch(query, tavilyApiKey) {
+async function fetchTavilySearch(query, tavilyApiKey, depth = "advanced") {
   try {
     const resp = await fetch("https://api.tavily.com/search", {
       method: "POST",
@@ -8,7 +8,7 @@ async function fetchTavilySearch(query, tavilyApiKey) {
       body: JSON.stringify({
         api_key: tavilyApiKey,
         query: query,
-        search_depth: "basic", // تغییر به حالت بیسیک جهت نصف شدن مصرف توکن
+        search_depth: depth, // "advanced" برای تحلیل عمیق و صفحات فارسی یا "basic" برای سرچ سبک
         include_answer: true,
         max_results: 4,
       }),
@@ -17,7 +17,7 @@ async function fetchTavilySearch(query, tavilyApiKey) {
     if (!resp.ok) return null;
     const data = await resp.json();
     return {
-      source: "Tavily (Basic)",
+      source: depth === "advanced" ? "Tavily (Advanced)" : "Tavily (Basic)",
       answer: data.answer || "",
       results: data.results || [],
     };
@@ -230,10 +230,19 @@ export async function onRequest(context) {
         });
       }
 
-      // دستورالعمل سیستمی برای هوش مصنوعی
-      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI built by Google. You have full memory of this ongoing conversation thread. Always stay consistent with previous conversation turns and user topics.\n\n[CRITICAL - NATIVE CHART ENGINE]: Your client application interface has a built-in Native Interactive Animated Chart Engine. NEVER say 'I cannot draw charts' or 'من به عنوان هوش مصنوعی متنی امکان ترسیم مستقیم نمودار ندارم'! Whenever the user asks for a chart, graph, price trend, technical levels, comparison, or asks 'can you draw/plot a chart?', you MUST ALWAYS include a ```chart code block in JSON format alongside your explanation so the app UI renders it immediately as an interactive visual chart:\n```chart\n{\"type\":\"line\",\"title\":\"روند قیمت\",\"data\":[{\"label\":\"نقطه ۱\",\"value\":80000},{\"label\":\"نقطه ۲\",\"value\":85000}]}\n```\n(Supported types: 'line' for trends/prices, 'bar' for categories, 'pie' for shares).";
+      // محاسبه تاریخ دقیق روز به وقت تهران (شمسی و میلادی) برای جلوگیری از هرگونه توهم تقویمی
+      let dateContext = "";
+      try {
+        const now = new Date();
+        const tehranSolar = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { timeZone: 'Asia/Tehran', dateStyle: 'full' }).format(now);
+        const tehranGregorian = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tehran', dateStyle: 'full' }).format(now);
+        dateContext = `\n\n[CURRENT REAL-TIME DATE AND TIME IN IRAN]:\nامروز به وقت تهران: ${tehranSolar} (مطابق با میلادی: ${tehranGregorian}). در صورت پرسش کاربر درباره تاریخ، تقویم شمسی یا میلادی یا رویدادهای روز، همیشه از این تاریخ قطعی و دقیق استفاده کن.`;
+      } catch (e) {}
 
-      const searchProvider = body.searchProvider || "tavily";
+      // دستورالعمل سیستمی برای هوش مصنوعی
+      let systemPromptText = "You are Gemini, an intelligent, helpful, and state-of-the-art AI built by Google. You have full memory of this ongoing conversation thread. Always stay consistent with previous conversation turns and user topics.\n\n[CRITICAL - NATIVE CHART ENGINE]: Your client application interface has a built-in Native Interactive Animated Chart Engine. NEVER say 'I cannot draw charts' or 'من به عنوان هوش مصنوعی متنی امکان ترسیم مستقیم نمودار ندارم'! Whenever the user asks for a chart, graph, price trend, technical levels, comparison, or asks 'can you draw/plot a chart?', you MUST ALWAYS include a ```chart code block in JSON format alongside your explanation so the app UI renders it immediately as an interactive visual chart:\n```chart\n{\"type\":\"line\",\"title\":\"روند قیمت\",\"data\":[{\"label\":\"نقطه ۱\",\"value\":80000},{\"label\":\"نقطه ۲\",\"value\":85000}]}\n```\n(Supported types: 'line' for trends/prices, 'bar' for categories, 'pie' for shares)." + dateContext;
+
+      const searchProvider = body.searchProvider || "tavily_advanced";
       const langSearchApiKey = env.LANGSEARCH_API_KEY || "sk-33e03c1b15624e888983cf65a5dab446";
 
       // ارزیابی هوشمند نیاز به جستجوی وب
@@ -242,19 +251,20 @@ export async function onRequest(context) {
 
       if (searchDecision.shouldSearch) {
         let searchData = null;
-        if (searchProvider === "langsearch") {
-          searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
-          if (!searchData && tavilyApiKey) {
-            searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey);
-          }
-        } else if (searchProvider === "auto") {
-          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey);
+        if (searchProvider === "tavily_basic") {
+          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "basic");
           if (!searchData && langSearchApiKey) {
             searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
           }
+        } else if (searchProvider === "langsearch") {
+          searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
+          // اگر لانگ‌سرچ خالی برگرداند (در وب فارسی صفر است)، اتوماتیک فال‌بک به تاویلی پیشرفته
+          if ((!searchData || searchData.results.length === 0) && tavilyApiKey) {
+            searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "advanced");
+          }
         } else {
-          // default: tavily basic
-          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey);
+          // پیش‌فرض: Tavily Advanced (دقیق‌ترین و عمیق‌ترین جستجو)
+          searchData = await fetchTavilySearch(searchDecision.query, tavilyApiKey, "advanced");
           if (!searchData && langSearchApiKey) {
             searchData = await fetchLangSearch(searchDecision.query, langSearchApiKey);
           }
@@ -288,6 +298,10 @@ export async function onRequest(context) {
           maxOutputTokens: body.maxOutputTokens ?? 2048,
         },
       };
+
+      if (body.useGoogleSearch) {
+        requestPayload.tools = [{ googleSearch: {} }];
+      }
 
       const geminiResponse = await fetch(geminiUrl, {
         method: "POST",
